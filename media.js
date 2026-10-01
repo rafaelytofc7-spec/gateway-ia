@@ -674,7 +674,7 @@
   async function renderPermissions() {
     const gp = $('#guidePanel'); if (!gp) return;
     let box = $('#permPanel');
-    if (!box) { box = document.createElement('div'); box.id = 'permPanel'; gp.prepend(box); }
+    if (!box) { box = document.createElement('div'); box.id = 'permPanel'; const ap = $('#appearPanel', gp); if (ap) ap.after(box); else gp.prepend(box); }
     const states = await Promise.all(PERMS.map(permState));
     const s = S();
     box.innerHTML = '<div class="section-title">Permissões</div><div class="card list">' + PERMS.map((p, i) => {
@@ -702,8 +702,8 @@
   }
 
   /* ---------- exportar conversa ---------- */
-  function exportChat() {
-    const c = currentChat(); if (!c || !c.messages.length) { toast('Conversa vazia'); return; }
+  function exportChat(chat) {
+    const c = chat && Array.isArray(chat.messages) ? chat : currentChat(); if (!c || !c.messages.length) { toast('Conversa vazia'); return; }
     const md = '# ' + c.title + '\n\n' + c.messages.map(m => (m.role === 'user' ? '## Você\n\n' : '## IA' + (m.meta && m.meta.via ? ' (' + m.meta.via.provider + ' · ' + m.meta.via.model + ')' : '') + '\n\n') + (m.content || m.error || '') + (m.files && m.files.length ? '\n\n_Anexos: ' + m.files.map(f => f.name).join(', ') + '_' : '')).join('\n\n');
     download(new Blob([md], { type: 'text/markdown' }), (c.title.replace(/[^\w\- ]+/g, '').trim().slice(0, 40) || 'conversa') + '.md');
   }
@@ -711,8 +711,7 @@
   /* ---------- ligações ---------- */
   $('#btnAttach').onclick = openAttachSheet;
   $('#btnMic').onclick = toggleMic;
-  const dh = $('.drawer-head');
-  if (dh && !$('#btnExport')) { const b = document.createElement('button'); b.className = 'btn small ghost'; b.id = 'btnExport'; b.textContent = 'Exportar .md'; b.onclick = exportChat; dh.insertBefore(b, dh.lastElementChild); }
+  // Exportar .md fica nas opções de cada conversa (botão ⋯ na lista ou toque no título).
   if (S().includeLocation) refreshLocation();
   document.addEventListener('visibilitychange', () => { if (!document.hidden && state.busy) wake(true); });
 

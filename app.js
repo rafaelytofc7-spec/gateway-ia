@@ -74,14 +74,15 @@ window.__KEYS = (() => { try { return JSON.parse(STORE.getItem('gw.keys') || SES
 const state = {
   providers: mergeProviders(LS.get('gw.providers', [])),
   route: Object.assign({ mode: 'auto', order: [], manual: '', manualFallback: true, off: {} }, LS.get('gw.route', {})),
-  settings: Object.assign({ system: '', temperature: null, maxTokens: null, timeout: 120, reasoning: true, proxy: '', rememberKeys: true, freeOnly: true, notify: false, autoSpeak: false, ttsEngine: 'browser', ttsVoice: '', pollVoice: 'nova', sttEngine: 'auto', imgEngine: 'pollinations', imgModel: 'zimage', imgSize: '1024x1024', includeLocation: false, wakeLock: true }, LS.get('gw.settings', {})),
+  settings: Object.assign({ system: '', temperature: null, maxTokens: null, timeout: 120, reasoning: true, proxy: '', rememberKeys: true, freeOnly: true, notify: false, autoSpeak: false, ttsEngine: 'browser', ttsVoice: '', pollVoice: 'nova', sttEngine: 'auto', imgEngine: 'pollinations', imgModel: 'zimage', imgSize: '1024x1024', includeLocation: false, wakeLock: true, theme: 'auto', sideCollapsed: false }, LS.get('gw.settings', {})),
   usage: LS.get('gw.usage', { date: today(), counts: {} }),
   cooldown: LS.get('gw.cooldown', {}),
   chats: LS.get('gw.chats', []),
   current: LS.get('gw.current', null),
   pendingImages: [],
   pendingFiles: [],
-  busy: null
+  busy: null,
+  animFrom: Infinity
 };
 if (state.usage.date !== today()) state.usage = { date: today(), counts: {} };
 
@@ -328,13 +329,20 @@ async function send(textOverride) {
   const text = (textOverride != null ? textOverride : input.value).trim();
   if (!text && !state.pendingImages.length && !state.pendingFiles.length) return;
   const chat = ensureChat();
-  const cmd = text.match(/^\/(imagem|img|image)\s+([\s\S]+)/i);
-  chat.messages.push({ role: 'user', content: text, images: state.pendingImages.slice(), files: state.pendingFiles.slice() });
+  state.animFrom = chat.messages.length;
+  const userMsg = { role: 'user', content: text, images: state.pendingImages.slice(), files: state.pendingFiles.slice() };
+  chat.messages.push(userMsg);
   if (chat.title === 'Nova conversa') chat.title = (text || (state.pendingFiles[0] && state.pendingFiles[0].name) || 'Imagem').slice(0, 48);
   state.pendingImages = []; state.pendingFiles = []; renderAttach();
   input.value = ''; autoGrow();
+  chat.updated = Date.now(); renderChatList();
+  await dispatch(chat, text, userMsg);
+}
+// Envia a última mensagem do usuário para o destino certo: comando /imagem ou rota de chat.
+async function dispatch(chat, text, userMsg) {
+  const cmd = text.match(/^\/(imagem|img|image)\s+([\s\S]+)/i);
   if (cmd && window.Media) { await Media.chatImage(chat, cmd[2].trim()); return; }
-  if (window.Project && chat.project) await Project.prepare(chat, text, chat.messages[chat.messages.length - 1]);
+  if (window.Project && chat.project) await Project.prepare(chat, text, userMsg);
   await runAssistant(chat);
 }
 
@@ -399,7 +407,13 @@ function stop() { const b = state.busy; if (!b) return; b.cancelled = true; if (
 function md(src) {
   if (!src) return '';
   const blocks = [];
-  src = src.replace(/```([^\n`]*)\n?([\s\S]*?)(```|$)/g, (_, info, code) => { const pm = /path=["']?([^\s"'`]+)/.exec(info || ''); blocks.push('<pre>' + (pm ? '<div class="code-path">' + esc(pm[1]) + '</div>' : '') + '<code>' + esc(code.replace(/\n$/, '')) + '</code></pre>'); return '\u0000' + (blocks.length - 1) + '\u0000'; });
+  src = src.replace(/```([^\n`]*)\n?([\s\S]*?)(```|$)/g, (_, info, code) => {
+    const pm = /path=["']?([^\s"'`]+)/.exec(info || '');
+    const lang = (info || '').replace(/path=["']?[^\s"'`]+["']?/, '').trim().split(/\s+/)[0] || '';
+    blocks.push('<pre><div class="code-head">' + (pm ? '<span class="lang code-path">' + esc(pm[1]) + '</span>' : '<span class="lang">' + esc(lang || 'código') + '</span>') +
+      '<button class="code-copy" type="button" aria-label="Copiar código">' + ICO.copy + '<span>Copiar</span></button></div><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
+    return '\u0000' + (blocks.length - 1) + '\u0000';
+  });
   const inline = (s) => esc(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -427,35 +441,134 @@ function md(src) {
 }
 
 /* ---------------- Render: chat ---------------- */
-const LOGO_BIG = '<svg class="logo-big" viewBox="0 0 32 32" width="56" height="56" fill="none" aria-hidden="true"><path d="M4 9c5 0 6 7 11 7M4 16h11M4 23c5 0 6-7 11-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M15 16h9" stroke="#3DDC97" stroke-width="2.4" stroke-linecap="round"/><circle cx="15" cy="16" r="3" fill="#3DDC97"/><path d="M23.5 12l5 4-5 4z" fill="#3DDC97"/></svg>';
+const LOGO_PATHS = '<path d="M4 9c5 0 6 7 11 7M4 16h11M4 23c5 0 6-7 11-7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M15 16h9" style="stroke:var(--accent)" stroke-width="2.6" stroke-linecap="round"/><circle cx="15" cy="16" r="3.2" style="fill:var(--accent)"/><path d="M23.5 12l5 4-5 4z" style="fill:var(--accent)"/>';
+const LOGO_BIG = '<svg class="logo-big" viewBox="0 0 32 32" width="52" height="52" fill="none" aria-hidden="true">' + LOGO_PATHS + '</svg>';
+const LOGO_SMALL = '<svg viewBox="0 0 32 32" width="14" height="14" fill="none" aria-hidden="true">' + LOGO_PATHS + '</svg>';
+const svgIco = (d, w) => '<svg viewBox="0 0 24 24" width="' + (w || 16) + '" height="' + (w || 16) + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+const ICO = {
+  copy: svgIco('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>', 14),
+  more: svgIco('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>', 18),
+  lock: svgIco('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>', 14),
+  key: svgIco('<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M17 6l3 3M14 9l2 2"/>', 18),
+  bulb: svgIco('<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>', 18),
+  code: svgIco('<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/>', 18),
+  image: svgIco('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>', 18),
+  text: svgIco('<path d="M4 6h16M4 12h16M4 18h10"/>', 18),
+  plus: svgIco('<path d="M12 5v14M5 12h14"/>', 18)
+};
+// Atalhos de provedor no primeiro uso (só aparecem se existirem no catálogo).
+const QUICK = [['groq', 'Muito rápido · cota diária generosa'], ['gemini', 'Modelos do Google, com visão de imagens'], ['openrouter', 'Vários modelos gratuitos (:free)']];
+const SUGGEST = [
+  ['bulb', 'Explicar um conceito', 'Explique em 3 linhas o que é o protocolo MCP.'],
+  ['code', 'Escrever código', 'Escreva uma função TypeScript que faça retry com backoff exponencial.'],
+  ['image', 'Gerar uma imagem', '/imagem um farol no cerrado ao entardecer, estilo aquarela'],
+  ['text', 'Resumir um texto', 'Resuma o texto a seguir em tópicos curtos:\n\n', true]
+];
+const finePointer = () => !!(window.matchMedia && matchMedia('(pointer:fine)').matches);
+function initials(name) {
+  const w = String(name || '?').split(/\s+/).filter(x => /^[\p{L}\p{N}]/u.test(x));
+  return ((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase();
+}
+function pav(p, cls) { return '<span class="pav ' + (p.custom ? 'custom' : p.tier) + '" aria-hidden="true">' + esc(initials(p.name)) + (cls != null ? '<span class="status ' + cls + '"></span>' : '') + '</span>'; }
+
+function onboardingHtml() {
+  const quick = QUICK.map(([id, d]) => [provById(id), d]).filter(x => x[0]);
+  return '<div class="empty onboard"><div class="head"><div class="logo-wrap">' + LOGO_BIG + '</div><h2>Bem-vindo ao Gateway IA</h2>' +
+    '<p>Converse com várias IAs grátis num só lugar. Se uma falhar ou atingir o limite, a próxima da rota assume sozinha.</p></div>' +
+    '<ol class="steps"><li><b>1</b><span><strong>Escolha um provedor grátis</strong> e abra o site dele para criar a chave.</span></li>' +
+    '<li><b>2</b><span><strong>Cole a chave</strong> e toque em Salvar (ou Testar).</span></li>' +
+    '<li><b>3</b><span><strong>Pronto:</strong> volte aqui e comece a conversar.</span></li></ol>' +
+    (quick.length ? '<div class="quick-prov">' + quick.map(([p, d]) => '<button class="qp" data-qp="' + esc(p.id) + '">' + pav(p) + '<div class="grow"><div class="title">' + esc(p.name) + '</div><div class="sub">' + esc(d) + '</div></div><span class="go">Configurar →</span></button>').join('') + '</div>' : '') +
+    '<button class="btn" id="goProv" style="width:100%">Ver todos os provedores</button>' +
+    '<div class="privacy">' + ICO.lock + '<span>Suas chaves ficam só neste navegador e vão direto para o provedor.</span></div></div>';
+}
+function readyHtml(configured) {
+  return '<div class="empty"><div class="logo-wrap">' + LOGO_BIG + '</div><h2>Como posso ajudar?</h2>' +
+    '<p>' + configured + (configured === 1 ? ' provedor ativo' : ' provedores ativos') + ' · se um falhar ou bater o limite, o próximo da rota assume.</p>' +
+    '<div class="suggest">' + SUGGEST.map((s, i) => '<button data-sg="' + i + '"><span class="s-ico">' + ICO[s[0]] + '</span><span><strong>' + esc(s[1]) + '</strong><small>' + esc(s[2].trim()) + '</small></span></button>').join('') + '</div>' +
+    '<p class="tip">Dica: pelo clipe você anexa imagens, PDF, planilhas ou um projeto ZIP.</p></div>';
+}
 
 function renderChat() {
   const box = $('#messages');
   const chat = currentChat();
+  const title = $('#topTitle');
+  const tb = $('#toBottom'); if (tb) tb.hidden = true;
   if (!chat || !chat.messages.length) {
     const configured = state.providers.filter(isConfigured).length;
-    box.innerHTML = '<div class="empty">' + LOGO_BIG +
-      '<h2>' + (configured ? 'Pronto para rotear' : 'Configure um provedor') + '</h2>' +
-      '<p>' + (configured ? configured + ' provedor(es) ativo(s). Se um falhar ou bater limite, o próximo da rota assume.' : 'Adicione uma chave grátis (Groq, Gemini, OpenRouter, Hugging Face…) em Provedores. As chaves ficam só neste navegador.') + '</p>' +
-      (configured ? '<div class="suggest">' + ['Explique em 3 linhas o que é o protocolo MCP.', 'Escreva uma função TypeScript que faça retry com backoff exponencial.', '/imagem um farol no cerrado ao entardecer, estilo aquarela'].map(s => '<button data-s="' + esc(s) + '">' + esc(s) + '</button>').join('') + '</div>' : '<button class="btn primary" id="goProv">Abrir Provedores</button>') +
-      '</div>';
-    $$('.suggest button', box).forEach(b => b.onclick = () => send(b.dataset.s));
+    box.innerHTML = configured ? readyHtml(configured) : onboardingHtml();
+    $$('[data-sg]', box).forEach(b => b.onclick = () => {
+      const sg = SUGGEST[+b.dataset.sg];
+      if (sg[3]) { const i = $('#input'); i.value = sg[2]; autoGrow(); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+      else send(sg[2]);
+    });
+    $$('[data-qp]', box).forEach(b => b.onclick = () => openProvider(b.dataset.qp));
     const g = $('#goProv', box); if (g) g.onclick = () => showView('providers');
-    $('#topTitle').textContent = 'Gateway IA';
+    title.textContent = 'Gateway IA'; title.classList.remove('clickable'); title.removeAttribute('title');
+    state.animFrom = Infinity;
     return;
   }
-  $('#topTitle').textContent = chat.title;
+  title.textContent = chat.title; title.classList.add('clickable'); title.title = 'Renomear, exportar ou apagar';
   box.innerHTML = '';
+  const lastUser = chat.messages.map(m => m.role).lastIndexOf('user');
   chat.messages.forEach((m, i) => {
     const el = document.createElement('div');
-    el.className = 'msg ' + m.role;
+    el.className = 'msg ' + m.role + (i >= state.animFrom ? ' enter' : '') + (i === chat.messages.length - 1 ? ' last' : '');
     el.dataset.i = i;
     box.appendChild(el);
-    if (m.role === 'user') {
-      el.innerHTML = (m.images || []).map(u => '<img src="' + u + '" alt="">').join('') + (m.files || []).map(f => '<span class="file-chip">' + esc(f.name) + ' · ' + Math.round(f.text.length / 1000) + 'k car.</span>').join('') + esc(m.content) + (m.ctxFiles && m.ctxFiles.length ? '<div class="ctx-used">Contexto do projeto: ' + m.ctxFiles.slice(0, 8).map(esc).join(', ') + (m.ctxFiles.length > 8 ? ' +' + (m.ctxFiles.length - 8) : '') + '</div>' : '');
-    } else updateMsgEl(el, m, false, i === chat.messages.length - 1);
+    if (m.role === 'user') renderUserMsg(el, m, i === lastUser);
+    else updateMsgEl(el, m, false, i === chat.messages.length - 1);
   });
+  state.animFrom = Infinity;
   box.scrollTop = box.scrollHeight;
+}
+
+function renderUserMsg(el, m, isLastUser) {
+  const acts = (m.content ? '<button data-a="copy">Copiar</button>' : '') + (isLastUser ? '<button data-a="edit" title="Editar e reenviar (↑ no campo vazio)">Editar</button>' : '');
+  el.innerHTML = '<div class="ubub">' + (m.images || []).map(u => '<img src="' + u + '" alt="">').join('') + (m.files || []).map(f => '<span class="file-chip">' + esc(f.name) + ' · ' + Math.round(f.text.length / 1000) + 'k car.</span>').join('') + esc(m.content) + (m.ctxFiles && m.ctxFiles.length ? '<div class="ctx-used">Contexto do projeto: ' + m.ctxFiles.slice(0, 8).map(esc).join(', ') + (m.ctxFiles.length > 8 ? ' +' + (m.ctxFiles.length - 8) : '') + '</div>' : '') + '</div>' +
+    (acts ? '<div class="msg-actions">' + acts + '</div>' : '');
+  $$('.msg-actions button', el).forEach(b => b.onclick = () => {
+    if (b.dataset.a === 'copy') { copyText(m.content); flashBtn(b, 'Copiado ✓'); }
+    if (b.dataset.a === 'edit') editMessage(+el.dataset.i);
+  });
+}
+function flashBtn(b, txt) {
+  if (b._t) clearTimeout(b._t); else b._orig = b.textContent;
+  b.textContent = txt; b._t = setTimeout(() => { b.textContent = b._orig; b._t = null; }, 1400);
+}
+
+// Edita a mensagem do usuário no lugar e reenvia (descarta as respostas seguintes).
+function editMessage(i) {
+  const chat = currentChat(); if (!chat) return;
+  if (state.busy) { toast('Aguarde a resposta terminar'); return; }
+  const m = chat.messages[i]; if (!m || m.role !== 'user') return;
+  const el = $('#messages .msg[data-i="' + i + '"]'); if (!el) return;
+  el.classList.add('editing');
+  el.innerHTML = '<div class="edit-box"><textarea rows="2" aria-label="Editar mensagem">' + esc(m.content) + '</textarea><div class="btn-row"><button class="btn small ghost" data-x="cancel">Cancelar</button><button class="btn small primary" data-x="save">Reenviar</button></div></div>';
+  const ta = $('textarea', el);
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 300) + 'px'; };
+  grow(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  el.scrollIntoView({ block: 'nearest' });
+  ta.oninput = grow;
+  const cancel = () => renderChat();
+  const save = () => {
+    if (state.busy) return;
+    const text = ta.value.trim();
+    if (!text && !(m.images && m.images.length) && !(m.files && m.files.length)) { toast('A mensagem está vazia'); return; }
+    const oldTitle = (m.content || '').slice(0, 48);
+    const nm = { role: 'user', content: text, images: (m.images || []).slice(), files: (m.files || []).slice() };
+    chat.messages = chat.messages.slice(0, i); chat.messages.push(nm);
+    if (i === 0 && text && chat.title === oldTitle) chat.title = text.slice(0, 48);
+    chat.updated = Date.now(); saveChats(); renderChatList();
+    state.animFrom = i + 1;
+    dispatch(chat, text, nm);
+  };
+  $('[data-x="cancel"]', el).onclick = cancel;
+  $('[data-x="save"]', el).onclick = save;
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+    else if (e.key === 'Enter' && !e.shiftKey && finePointer()) { e.preventDefault(); save(); }
+  });
 }
 
 function updateMsgEl(el, m, streaming, isLast) {
@@ -463,30 +576,33 @@ function updateMsgEl(el, m, streaming, isLast) {
   const box = $('#messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   let meta = '';
-  const trail = (m.meta && m.meta.trail || []).filter(x => !x.ok).map((x, i) => '<span class="trail" data-t="' + i + '">' + esc(x.name) + ' ' + (x.status > 0 ? x.status : '✕') + '</span>').join('');
+  const trail = (m.meta && m.meta.trail || []).filter(x => !x.ok).map((x, i) => '<span class="trail" data-t="' + i + '" title="Ver motivo da falha">' + esc(x.name) + ' ' + (x.status > 0 ? x.status : '✕') + '</span>').join('');
   if (m.meta && m.meta.via) {
     const v = m.meta.via;
     const tok = v.usage && (v.usage.total_tokens || (v.usage.prompt_tokens || 0) + (v.usage.completion_tokens || 0));
     meta = trail + '<span class="badge ' + v.tier + '">' + TIER_LABEL[v.tier] + '</span><span class="via">' + esc(v.provider) + '</span><span>' + esc(v.model) + '</span><span>· ' + (v.ms / 1000).toFixed(1).replace('.', ',') + 's' + (tok ? ' · ' + tok + ' tok' : '') + '</span>';
   } else if (m.meta && m.meta.current) meta = trail + '<span>→ ' + esc(m.meta.current) + '</span>';
   else if (trail) meta = trail;
-  let html = meta ? '<div class="meta">' + meta + '</div>' : '';
+  let html = '<div class="meta"><span class="avatar">' + LOGO_SMALL + '</span>' + (meta || '<span class="via">Gateway IA</span>') + '</div>';
   if (m.reasoning && state.settings.reasoning) html += '<details class="reasoning"' + (streaming && !m.content ? ' open' : '') + '><summary>Raciocínio · ' + m.reasoning.length + ' caracteres</summary><div>' + esc(m.reasoning) + '</div></details>';
-  html += '<div class="bubble' + (streaming ? ' cursor' : '') + '">' + md(m.content) + (m.media && window.Media ? Media.mediaHtml(m.media) : '') + (m.error ? '<p class="err">' + esc(m.error) + '</p>' : '') + '</div>';
-  if (!streaming && (m.content || m.error || m.media)) html += '<div class="msg-actions">' + (m.content ? '<button data-a="copy">Copiar</button><button data-a="speak">Ouvir</button><button data-a="share">Compartilhar</button>' : '') + (isLast && !m.media ? '<button data-a="retry">Tentar de novo</button>' : '') + (window.Project && m.content ? Project.editButton(m.content) : '') + '</div>';
+  const waiting = streaming && !m.content && !m.error && !(m.reasoning && state.settings.reasoning);
+  const noProv = m.error && /^Nenhum provedor|^Nenhum modelo com visão/.test(m.error);
+  html += '<div class="bubble' + (streaming && !waiting ? ' cursor' : '') + '">' + (waiting ? '<span class="typing" aria-label="Aguardando resposta"><i></i><i></i><i></i></span>' : md(m.content)) + (m.media && window.Media ? Media.mediaHtml(m.media) : '') + (m.error ? '<p class="err">' + esc(m.error) + (noProv ? ' <button class="err-act" data-go="providers">Abrir Provedores</button>' : '') + '</p>' : '') + '</div>';
+  if (!streaming && (m.content || m.error || m.media)) html += '<div class="msg-actions">' + (m.content ? '<button data-a="copy">Copiar</button><button data-a="speak">Ouvir</button><button data-a="share">Compartilhar</button>' : '') + (isLast && !m.media ? '<button data-a="retry">' + (m.content && !m.error ? 'Gerar de novo' : 'Tentar de novo') + '</button>' : '') + (window.Project && m.content ? Project.editButton(m.content) : '') + '</div>';
   el.innerHTML = html;
   $$('.trail[data-t]', el).forEach(b => b.onclick = () => {
     const x = m.meta.trail.filter(y => !y.ok)[+b.dataset.t];
     openSheet('<h3>' + esc(x.name) + '</h3><p class="lead">' + esc(x.model || '') + '</p><div class="warnbox">Status ' + esc(x.status > 0 ? x.status : 'sem resposta') + ': ' + esc(x.error || '') + '</div><p class="hint">429 = limite atingido (o modelo fica em pausa e a rota pula para o próximo). 401/403 = chave inválida. 404 = ID do modelo não existe mais — use “Buscar modelos” no provedor.</p>');
   });
+  $$('[data-go]', el).forEach(b => b.onclick = () => showView(b.dataset.go));
   $$('.msg-actions button', el).forEach(b => b.onclick = () => {
-    if (b.dataset.a === 'copy') copyText(m.content);
+    if (b.dataset.a === 'copy') { copyText(m.content); flashBtn(b, 'Copiado ✓'); }
     if (b.dataset.a === 'speak' && window.Media) Media.speak(m.content, b);
     if (b.dataset.a === 'share') { if (navigator.share) navigator.share({ text: m.content }).catch(() => {}); else copyText(m.content); }
     if (b.dataset.a === 'apply' && window.Project) Project.applyEdits(m.content);
-    if (b.dataset.a === 'retry') { const c = currentChat(); if (!c || state.busy) return; c.messages.pop(); runAssistant(c); }
+    if (b.dataset.a === 'retry') { const c = currentChat(); if (!c || state.busy) return; c.messages.pop(); state.animFrom = c.messages.length; runAssistant(c); }
   });
-  $$('a', el).forEach(a => a.onclick = (e) => { e.preventDefault(); openUrl(a.href); });
+  $$('.bubble a, .reasoning a', el).forEach(a => a.onclick = (e) => { e.preventDefault(); openUrl(a.href); });
   if (nearBottom) box.scrollTop = box.scrollHeight;
 }
 
@@ -495,19 +611,87 @@ function setBusy(b) {
   btn.classList.toggle('stop', b);
   $('#icoSend').style.display = b ? 'none' : 'block'; $('#icoStop').style.display = b ? 'block' : 'none';
   btn.setAttribute('aria-label', b ? 'Parar' : 'Enviar');
+  $('#app').classList.toggle('busy', !!b);
+  updateSendState();
+}
+function updateSendState() {
+  const i = $('#input'), btn = $('#btnSend'); if (!i || !btn) return;
+  const has = !!(i.value.trim() || state.pendingImages.length || state.pendingFiles.length);
+  btn.classList.toggle('idle', !state.busy && !has);
 }
 
+/* ---------------- Lista de conversas ---------------- */
+function dayGroup(ts) {
+  const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (ts >= start) return 'Hoje';
+  if (ts >= start - 864e5) return 'Ontem';
+  if (ts >= start - 6 * 864e5) return 'Últimos 7 dias';
+  if (ts >= start - 29 * 864e5) return 'Últimos 30 dias';
+  return 'Mais antigas';
+}
+function fmtWhen(ts) {
+  const d = new Date(ts);
+  return dayGroup(ts) === 'Hoje' ? d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+}
 function renderChatList() {
   const box = $('#chatList');
-  if (!state.chats.length) { box.innerHTML = '<p class="hint" style="padding:12px">Nenhuma conversa ainda.</p>'; return; }
+  if (!state.chats.length) { box.innerHTML = '<div class="drawer-empty">Nenhuma conversa ainda.<br>Elas aparecem aqui.</div>'; return; }
   const q = (state.chatQuery || '').toLowerCase().trim();
-  const list = q ? state.chats.filter(c => c.title.toLowerCase().includes(q) || c.messages.some(m => (m.content || '').toLowerCase().includes(q))) : state.chats;
-  if (!list.length) { box.innerHTML = '<p class="hint" style="padding:12px">Nada encontrado.</p>'; return; }
-  box.innerHTML = list.map(c => '<div class="chat-item' + (c.id === state.current ? ' on' : '') + '" data-id="' + c.id + '"><div class="t">' + esc(c.title) + '<small>' + new Date(c.updated).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' · ' + c.messages.length + ' msgs</small></div><button class="icon-btn del" aria-label="Apagar">✕</button></div>').join('');
+  const list = (q ? state.chats.filter(c => c.title.toLowerCase().includes(q) || c.messages.some(m => (m.content || '').toLowerCase().includes(q))) : state.chats)
+    .slice().sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  if (!list.length) { box.innerHTML = '<div class="drawer-empty">Nada encontrado.</div>'; return; }
+  let html = '', group = '';
+  for (const c of list) {
+    const g = dayGroup(c.updated || 0);
+    if (g !== group) { group = g; html += '<div class="chat-group">' + g + '</div>'; }
+    const n = c.messages.length;
+    html += '<div class="chat-item' + (c.id === state.current ? ' on' : '') + '" data-id="' + esc(c.id) + '"><button class="t" title="' + esc(c.title) + '">' + esc(c.title) + '<small>' + fmtWhen(c.updated || 0) + ' · ' + n + (n === 1 ? ' mensagem' : ' mensagens') + (c.project ? ' · projeto' : '') + '</small></button><button class="icon-btn more" aria-label="Opções da conversa" title="Renomear, exportar ou apagar">' + ICO.more + '</button></div>';
+  }
+  box.innerHTML = html;
   $$('.chat-item', box).forEach(it => {
     $('.t', it).onclick = () => { state.current = it.dataset.id; saveChats(); renderChat(); renderChatList(); closeDrawer(); showView('chat'); };
-    $('.del', it).onclick = () => { state.chats = state.chats.filter(c => c.id !== it.dataset.id); if (state.current === it.dataset.id) state.current = state.chats[0]?.id || null; saveChats(); renderChatList(); renderChat(); };
+    $('.more', it).onclick = () => chatOptions(it.dataset.id);
   });
+}
+function chatOptions(id) {
+  const c = state.chats.find(x => x.id === id); if (!c) return;
+  openSheet('<h3>Conversa</h3><p class="lead">' + c.messages.length + (c.messages.length === 1 ? ' mensagem' : ' mensagens') + ' · atualizada em ' + new Date(c.updated || Date.now()).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + '</p>' +
+    '<div class="field"><label for="cvName">Nome</label><div class="input-group"><input class="input" id="cvName" maxlength="80" autocomplete="off" value="' + esc(c.title) + '"><button class="btn primary" id="cvSave">Salvar</button></div></div>' +
+    '<div class="card list"><button class="row" id="cvExport"><div class="grow"><div class="title">Exportar como Markdown</div><div class="sub">Baixa um arquivo .md com a conversa</div></div></button>' +
+    '<button class="row" id="cvDel"><div class="grow"><div class="title" style="color:var(--danger)">Apagar conversa</div><div class="sub">Dá para desfazer logo em seguida</div></div></button></div>');
+  const inp = $('#cvName');
+  const save = () => {
+    const v = inp.value.trim(); if (!v) { toast('Informe um nome'); return; }
+    c.title = v.slice(0, 80); saveChats(); renderChatList();
+    if (c.id === state.current && state.view === 'chat' && c.messages.length) $('#topTitle').textContent = c.title;
+    closeSheet(); toast('Conversa renomeada');
+  };
+  $('#cvSave').onclick = save;
+  inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); save(); } };
+  $('#cvExport').onclick = () => { if (window.Media) Media.exportChat(c); };
+  $('#cvDel').onclick = () => { closeSheet(); deleteChat(c.id); };
+  if (finePointer()) setTimeout(() => { inp.focus(); inp.select(); }, 60);
+}
+function deleteChat(id) {
+  const idx = state.chats.findIndex(c => c.id === id); if (idx < 0) return;
+  if (state.busy && id === state.current) { toast('Aguarde a resposta terminar'); return; }
+  const [c] = state.chats.splice(idx, 1);
+  const wasCurrent = state.current === id;
+  if (wasCurrent) state.current = state.chats[0] ? state.chats[0].id : null;
+  saveChats(); renderChatList(); if (state.view === 'chat') renderChat();
+  toast('Conversa apagada', { action: 'Desfazer', fn: () => {
+    if (state.chats.some(x => x.id === c.id)) return;
+    state.chats.splice(Math.min(idx, state.chats.length), 0, c);
+    if (wasCurrent && !state.busy) state.current = c.id;
+    saveChats(); renderChatList(); if (state.view === 'chat' && !state.busy) renderChat();
+  } });
+}
+function startNewChat() {
+  if (state.busy) { toast('Aguarde a resposta terminar ou toque em parar'); return; }
+  const c = currentChat();
+  if (!(c && !c.messages.length && !c.project)) newChat();
+  closeDrawer(); showView('chat');
+  if (finePointer()) $('#input').focus();
 }
 
 /* ---------------- Imagens ---------------- */
@@ -534,7 +718,7 @@ function renderAttach() {
     state.pendingFiles.map((f, i) => '<div class="file-pend"><span>' + esc(f.name) + '<small>' + (f.text.length < 1000 ? f.text.length + ' caracteres' : Math.round(f.text.length / 1000) + 'k caracteres') + (f.truncated ? ' · truncado' : '') + '</small></span><button data-f="' + i + '" aria-label="Remover">✕</button></div>').join('');
   $$('button[data-i]', row).forEach(b => b.onclick = () => { state.pendingImages.splice(+b.dataset.i, 1); renderAttach(); });
   $$('button[data-f]', row).forEach(b => b.onclick = () => { state.pendingFiles.splice(+b.dataset.f, 1); renderAttach(); });
-  updateRouteChip();
+  updateRouteChip(); updateSendState();
 }
 
 /* ---------------- Chip de rota ---------------- */
@@ -569,16 +753,20 @@ function provStatus(p) {
 }
 function renderProviders() {
   const box = $('#providersList');
+  const anyConfigured = state.providers.some(isConfigured);
+  const rec = new Set(QUICK.map(q => q[0]));
+  const subCls = { ok: 'ok-txt', err: 'err-txt', cool: 'warn-txt' };
   const groups = [['free', 'Grátis'], ['local', 'Local'], ['paid', state.settings.freeOnly ? 'Pagos — desligados por “Só IA grátis” (Rotas)' : 'Pagos']];
-  box.innerHTML = groups.map(([tier, label]) => {
+  box.innerHTML = (anyConfigured ? '' : '<div class="intro"><span class="i-ico">' + ICO.key + '</span><div><strong>Comece por um provedor grátis</strong>Os marcados como “Recomendado” têm cotas gratuitas diárias. Toque em um, crie a chave no site dele e cole aqui — ela fica só neste navegador.</div></div>') +
+    groups.map(([tier, label]) => {
     const ps = state.providers.filter(p => p.tier === tier);
     if (!ps.length) return '';
     return '<div class="section-title">' + label + '</div><div class="card list">' + ps.map(p => {
       const [cls, txt] = provStatus(p);
-      return '<button class="row" data-p="' + p.id + '"><span class="status ' + cls + '"></span><div class="grow"><div class="title">' + esc(p.name) + '</div><div class="sub">' + esc(txt) + ' · ' + p.models.length + ' modelos</div></div><svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>';
+      return '<button class="row" data-p="' + p.id + '">' + pav(p, cls) + '<div class="grow"><div class="title">' + esc(p.name) + (rec.has(p.id) && !isConfigured(p) ? '<span class="rec">Recomendado</span>' : '') + '</div><div class="sub">' + (subCls[cls] ? '<span class="' + subCls[cls] + '">' + esc(txt) + '</span>' : esc(txt)) + ' · ' + p.models.length + ' modelos</div></div><svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></button>';
     }).join('') + '</div>';
   }).join('') +
-    '<div class="section-title">Outro provedor</div><div class="card list"><button class="row" id="addCustom"><span class="status"></span><div class="grow"><div class="title">Adicionar compatível com OpenAI</div><div class="sub">Qualquer endpoint /v1/chat/completions</div></div></button></div>' +
+    '<div class="section-title">Outro provedor</div><div class="card list"><button class="row" id="addCustom"><span class="pav custom" aria-hidden="true">+</span><div class="grow"><div class="title">Adicionar compatível com OpenAI</div><div class="sub">Qualquer endpoint /v1/chat/completions</div></div></button></div>' +
     '<p class="hint">Catálogo de ' + window.CATALOG_DATE + '. IDs de modelos mudam rápido: use “Buscar modelos” para listar o que o provedor oferece hoje.</p>';
   $$('[data-p]', box).forEach(b => b.onclick = () => openProvider(b.dataset.p));
   $('#addCustom').onclick = addCustomProvider;
@@ -589,7 +777,7 @@ function openProvider(id) {
   const body = '<h3><span class="badge ' + p.tier + '">' + TIER_LABEL[p.tier] + '</span>' + esc(p.name) + '</h3>' +
     '<p class="lead">' + esc(p.limits || '') + '</p>' +
     '<div class="row" style="padding:4px 0 14px;border:0;min-height:0"><div class="grow"><div class="title">Ativo na rota</div></div><label class="switch"><input type="checkbox" id="pEnabled" ' + (p.enabled ? 'checked' : '') + '><span></span></label></div>' +
-    (p.noKey ? '' : '<div class="field"><label>Chave de API</label><div class="input-group"><input class="input mono" id="pKey" type="password" autocomplete="off" spellcheck="false" placeholder="cole a chave" value="' + esc(p.key) + '"><button class="btn" id="pShow">Ver</button><button class="btn" id="pPaste">Colar</button></div>' + (p.keyUrl ? '<p class="hint"><a href="' + esc(p.keyUrl) + '" data-ext>Obter chave em ' + esc(p.keyUrl.replace(/^https?:\/\//, '').split('/')[0]) + '</a></p>' : '') + '</div>') +
+    (p.noKey ? '' : '<div class="field"><label>Chave de API</label><div class="input-group"><input class="input mono" id="pKey" type="password" autocomplete="off" spellcheck="false" placeholder="cole a chave" value="' + esc(p.key) + '"><button class="btn" id="pShow">Ver</button><button class="btn" id="pPaste">Colar</button></div>' + (p.keyUrl ? '<a class="keylink" href="' + esc(p.keyUrl) + '" data-ext>' + ICO.key + (p.tier === 'free' ? 'Criar chave grátis em ' : 'Obter chave em ') + esc(p.keyUrl.replace(/^https?:\/\//, '').split('/')[0]) + ' ↗</a>' : '') + '</div>') +
     (p.needsAccount ? '<div class="field"><label>Account ID</label><input class="input mono" id="pAcc" value="' + esc(p.accountId) + '" placeholder="ex.: 0123abcd…"></div>' : '') +
     '<div class="row" style="padding:0 0 14px;border:0;min-height:0"><div class="grow"><div class="title" style="font-size:14px">Usar proxy CORS</div><div class="sub" style="white-space:normal">' + (p.cors === false ? 'Este provedor bloqueia chamadas do navegador' : 'Normalmente não precisa') + (state.settings.proxy ? '' : ' · configure em Rotas') + '</div></div><label class="switch"><input type="checkbox" id="pProxy" ' + (p.useProxy ? 'checked' : '') + '><span></span></label></div>' +
     '<div class="field"><label>Base URL</label><input class="input mono" id="pBase" value="' + esc(p.baseURL) + '" spellcheck="false"></div>' +
@@ -603,6 +791,7 @@ function openProvider(id) {
   openSheet(body);
   const root = $('#sheetBody');
   renderModelRows(p);
+  if (!p.noKey && !p.key && finePointer()) setTimeout(() => { const k = $('#pKey', root); if (k) k.focus(); }, 80);
   const collect = () => {
     p.enabled = $('#pEnabled', root).checked;
     if (!p.noKey) p.key = $('#pKey', root).value.trim();
@@ -806,7 +995,7 @@ function renderGuide() {
   const free = state.providers.filter(p => p.tier === 'free' && !p.custom);
   const paid = state.providers.filter(p => p.tier === 'paid' && !p.custom);
   const link = (u, t) => '<a href="' + esc(u) + '" data-ext>' + esc(t) + '</a>';
-  $('#guidePanel').innerHTML =
+  $('#guidePanel').innerHTML = '<div id="appearPanel"></div>' +
     '<div class="section-title">Mudanças recentes · ' + window.CATALOG_DATE + '</div><div class="card">' + G.alerts.map(a => '<a class="alert" href="' + esc(a[2]) + '" data-ext><strong>' + esc(a[0]) + '</strong><span>' + esc(a[1]) + '</span></a>').join('') + '</div>' +
     '<div class="section-title">Grátis — limites e treino</div><div class="card"><table class="gtable">' + free.map(p => '<tr><td>' + esc(p.name) + '<span class="muted">' + esc(p.training) + '</span></td><td>' + esc(p.limits) + '</td></tr>').join('') + '</table></div>' +
     (G.media ? '<div class="section-title">Mídia grátis — imagem, vídeo e voz</div><div class="card"><table class="gtable">' + G.media.map(r => '<tr><td>' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td></tr>').join('') + '</table></div>' : '') +
@@ -817,8 +1006,18 @@ function renderGuide() {
     '<div class="section-title">Navegador e CORS</div><div class="card"><table class="gtable">' + G.cors.map(r => '<tr><td>' + esc(r[0]) + '</td><td>' + esc(r[1]) + '</td></tr>').join('') + '</table></div>' +
     '<div class="section-title">Pode estar desatualizado</div><div class="card" style="padding:10px 14px"><ul style="margin:0;padding-left:18px;font-size:13.5px">' + G.stale.map(s => '<li>' + esc(s) + '</li>').join('') + '</ul></div>' +
     '<div class="section-title">Fontes oficiais</div><div class="card"><table class="gtable">' + G.sources.map(s => '<tr><td colspan="2" style="width:auto;font-weight:450">' + link(s[1], s[0]) + '</td></tr>').join('') + '</table></div>' +
-    '<p class="hint">Gateway IA Web 1.0.0 · catálogo de ' + window.CATALOG_DATE + '. O app chama as APIs direto do seu navegador; nenhum servidor intermediário (exceto o seu proxy, se configurado).</p>';
+    '<p class="hint">Gateway IA Web 1.1.0 · catálogo de ' + window.CATALOG_DATE + '. O app chama as APIs direto do seu navegador; nenhum servidor intermediário (exceto o seu proxy, se configurado).</p>';
   $$('#guidePanel a[data-ext]').forEach(a => a.onclick = e => { e.preventDefault(); openUrl(a.getAttribute('href')); });
+  renderAppearance();
+}
+function renderAppearance() {
+  const box = $('#appearPanel'); if (!box) return;
+  const t = ['light', 'dark'].includes(state.settings.theme) ? state.settings.theme : 'auto';
+  const keys = [['Enter', 'Enviar mensagem'], ['Shift + Enter', 'Nova linha'], ['↑', 'Editar a última mensagem (campo vazio)'], ['Ctrl + K', 'Nova conversa (⌘ + K no Mac)'], ['Esc', 'Fechar painel ou voltar']];
+  box.innerHTML = '<div class="section-title">Aparência</div><div class="seg">' +
+    [['auto', 'Automático', 'segue o sistema'], ['light', 'Claro', 'sempre claro'], ['dark', 'Escuro', 'sempre escuro']].map(o => '<button data-theme-opt="' + o[0] + '" class="' + (t === o[0] ? 'on' : '') + '">' + o[1] + '<small>' + o[2] + '</small></button>').join('') + '</div>' +
+    '<div class="desk-only"><div class="section-title">Atalhos de teclado</div><div class="card shortcuts">' + keys.map(r => '<span>' + r[0].split(' + ').map(k => '<kbd>' + esc(k) + '</kbd>').join(' + ') + '</span><span>' + esc(r[1]) + '</span>').join('') + '</div></div>';
+  $$('[data-theme-opt]', box).forEach(b => b.onclick = () => setTheme(b.dataset.themeOpt));
 }
 
 /* ---------------- UI geral ---------------- */
@@ -827,7 +1026,7 @@ function showView(v) {
   $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.view === v));
   state.view = v;
   const titles = { providers: 'Provedores', route: 'Rotas', guide: 'Mais', create: 'Criar' };
-  if (v === 'chat') renderChat(); else $('#topTitle').textContent = titles[v];
+  if (v === 'chat') renderChat(); else { $('#topTitle').textContent = titles[v]; $('#topTitle').classList.remove('clickable'); $('#topTitle').removeAttribute('title'); }
   if (v === 'route') renderRoute();
   if (v === 'create' && window.Media) Media.renderCreate();
   if (v === 'guide' && window.Media) Media.renderPermissions();
@@ -836,10 +1035,18 @@ function showView(v) {
 }
 function openSheet(html) { $('#sheetBody').innerHTML = html; $('#sheet').classList.add('on'); $('#scrim').classList.add('on'); $('#sheetBody').scrollTop = 0; }
 function closeSheet() { $('#sheet').classList.remove('on'); if (!$('#drawer').classList.contains('on')) $('#scrim').classList.remove('on'); }
-function openDrawer() { renderChatList(); $('#drawer').classList.add('on'); $('#scrim').classList.add('on'); }
+function openDrawer() { if (isWide()) return; renderChatList(); $('#drawer').classList.add('on'); $('#scrim').classList.add('on'); }
 function closeDrawer() { $('#drawer').classList.remove('on'); if (!$('#sheet').classList.contains('on')) $('#scrim').classList.remove('on'); }
 let toastT;
-function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), 2200); }
+// toast(texto) ou toast(texto, { action: 'Desfazer', fn }) — com ação, fica 5 s e aceita toque.
+function toast(t, opt) {
+  const el = $('#toast'); if (!el) return;
+  el.textContent = t;
+  const act = opt && opt.action && typeof opt.fn === 'function';
+  if (act) { const b = document.createElement('button'); b.textContent = opt.action; b.onclick = () => { el.classList.remove('on'); clearTimeout(toastT); opt.fn(); }; el.appendChild(b); }
+  el.classList.toggle('has-action', !!act);
+  el.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('on'), act ? 5000 : 2200);
+}
 function readClip() { return navigator.clipboard && navigator.clipboard.readText ? navigator.clipboard.readText().catch(() => '') : Promise.resolve(''); }
 function copyText(t) { if (window.Native) { Native.copy(t); toast('Copiado'); } else if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Copiado'), () => fallbackCopy(t)); else fallbackCopy(t);
 }
@@ -848,7 +1055,26 @@ function fallbackCopy(t) {
   try { document.execCommand('copy'); toast('Copiado'); } catch { toast('Não foi possível copiar'); } ta.remove(); }
 function openUrl(u) { if (window.Native) Native.open(u); else window.open(u, '_blank', 'noopener'); }
 function refreshAll(keepSheet) { renderProviders(); if (state.view === 'route') renderRoute(); updateRouteChip(); if (state.view === 'chat' && !state.busy) renderChat(); }
-function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; }
+function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 200) + 'px'; updateSendState(); }
+
+/* ---------------- Tema e barra lateral ---------------- */
+const mq = (q) => (window.matchMedia ? matchMedia(q) : { matches: false });
+const mqLight = mq('(prefers-color-scheme: light)');
+const mqWide = mq('(min-width: 900px)');
+const isWide = () => !!mqWide.matches;
+const onMq = (m, fn) => { if (m.addEventListener) m.addEventListener('change', fn); else if (m.addListener) m.addListener(fn); };
+function effectiveTheme() { const t = state.settings.theme; return t === 'light' || t === 'dark' ? t : (mqLight.matches ? 'light' : 'dark'); }
+function applyTheme() {
+  const eff = effectiveTheme();
+  document.documentElement.setAttribute('data-theme', eff);
+  const m = $('meta[name="theme-color"]'); if (m) m.setAttribute('content', eff === 'light' ? '#F7F8F7' : '#0E1012');
+  const b = $('#btnTheme'); if (b) { const l = eff === 'light' ? 'Mudar para o tema escuro' : 'Mudar para o tema claro'; b.setAttribute('aria-label', l); b.title = l; }
+}
+function setTheme(t) { state.settings.theme = ['light', 'dark'].includes(t) ? t : 'auto'; saveSettings(); applyTheme(); renderAppearance(); }
+function applySide() {
+  $('#app').classList.toggle('side-off', !!state.settings.sideCollapsed);
+  const b = $('#btnDrawer'); if (b) b.title = isWide() ? (state.settings.sideCollapsed ? 'Mostrar conversas' : 'Ocultar conversas') : 'Conversas';
+}
 
 window.handleBack = function () {
   if ($('#sheet').classList.contains('on')) { closeSheet(); return true; }
@@ -859,10 +1085,25 @@ window.handleBack = function () {
 
 function init() {
   $$('.tab').forEach(t => t.onclick = () => showView(t.dataset.view));
-  $('#btnDrawer').onclick = openDrawer;
+  applyTheme(); applySide();
+  $('#btnDrawer').onclick = () => { if (isWide()) { state.settings.sideCollapsed = !state.settings.sideCollapsed; saveSettings(); applySide(); } else openDrawer(); };
+  $('#btnTheme').onclick = () => { setTheme(effectiveTheme() === 'dark' ? 'light' : 'dark'); toast(effectiveTheme() === 'light' ? 'Tema claro' : 'Tema escuro'); };
+  onMq(mqLight, () => { if (!['light', 'dark'].includes(state.settings.theme)) applyTheme(); });
+  onMq(mqWide, () => { if (isWide()) closeDrawer(); applySide(); });
+  $('#topTitle').onclick = () => { const c = currentChat(); if (state.view === 'chat' && c && c.messages.length) chatOptions(c.id); };
+  const msgs = $('#messages'), tb = $('#toBottom');
+  msgs.addEventListener('scroll', () => { tb.hidden = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 240; }, { passive: true });
+  tb.onclick = () => msgs.scrollTo({ top: msgs.scrollHeight, behavior: 'smooth' });
+  // copiar bloco de código (delegado: os blocos são recriados durante o streaming)
+  msgs.addEventListener('click', e => {
+    const b = e.target.closest && e.target.closest('.code-copy'); if (!b) return;
+    const code = b.closest('pre') && b.closest('pre').querySelector('code'); if (!code) return;
+    copyText(code.textContent); b.classList.add('done'); const sp = $('span', b); if (sp) sp.textContent = 'Copiado';
+    setTimeout(() => { b.classList.remove('done'); if (sp) sp.textContent = 'Copiar'; }, 1500);
+  });
   $('#scrim').onclick = () => { closeSheet(); closeDrawer(); };
-  $('#btnNewChat').onclick = () => { if (!state.busy) newChat(); };
-  $('#btnNewChat2').onclick = () => { if (!state.busy) { newChat(); closeDrawer(); showView('chat'); } };
+  $('#btnNewChat').onclick = startNewChat;
+  $('#btnNewChat2').onclick = startNewChat;
   $('#btnSend').onclick = () => state.busy ? stop() : send();
   $('#routeChip').onclick = openRouteQuick;
   const input = $('#input');
@@ -877,8 +1118,18 @@ function init() {
   showView('chat'); updateRouteChip();
   setInterval(() => { if (!state.busy) updateRouteChip(); }, 15000);
   if (!PERSIST) setTimeout(() => toast('Modo pré-visualização: nada será salvo. Abra em nova aba para salvar.'), 600);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') window.handleBack(); });
-  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer:fine)').matches) { e.preventDefault(); $('#btnSend').click(); } });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { window.handleBack(); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); startNewChat(); }
+  });
+  input.addEventListener('keydown', e => {
+    if (e.isComposing) return;
+    if (e.key === 'Enter' && !e.shiftKey && finePointer()) { e.preventDefault(); $('#btnSend').click(); return; }
+    if (e.key === 'ArrowUp' && !e.shiftKey && !input.value && !state.busy && !state.pendingImages.length && !state.pendingFiles.length) {
+      const c = currentChat(); const i = c ? c.messages.map(m => m.role).lastIndexOf('user') : -1;
+      if (i >= 0) { e.preventDefault(); editMessage(i); }
+    }
+  });
   let deferred = null; const ib = $('#btnInstall');
   window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; ib.hidden = false; });
   ib.onclick = async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice; deferred = null; ib.hidden = true; };
